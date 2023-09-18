@@ -185,6 +185,7 @@ Overwrites the whole HTML document (head and body elements included)."
   (ps-eval :async t :buffer buffer
     (setf (ps:@ document body |innerHTML|) (ps:lisp content))))
 
+;; TODO Bad practice, add style in head always.
 (defun html-set-style (style-string &optional (buffer (current-buffer)))
   (let ((style (spinneret:with-html-string (:style (:raw style-string)))))
     (ps-eval :async t :buffer buffer
@@ -433,4 +434,3 @@ Only keyword and rest arguments are accepted."
 Only keyword arguments are accepted."
   `(prog1 (define-internal-page-command ,name (,@arglist) (,buffer-var ,title ,mode) ,@body)
      (setf (slot-value #',name 'visibility) :global)))
-
