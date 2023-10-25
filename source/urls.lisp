@@ -398,25 +398,26 @@ Example:
            params))
 
 (export-always 'parse-nyxt-url)
-(-> parse-nyxt-url ((or string quri:uri)) (values symbol list &optional))
+(-> parse-nyxt-url ((or string quri:uri)) (values symbol internal-page list &optional))
 (defun parse-nyxt-url (url)
   "Return two values parsed from the nyxt: URL:
 - the name of the `internal-page',
-- the arguments to it.
+- the `internal-page',
+- the arguments passed to it.
 
 Error out if some of the params are not constants. Thanks to this,
 `parse-nyxt-url' can be repeatedly called on the same nyxt: URL, with the
 guarantee of the same result."
-  (let* ((url (url url))
-         (symbol (quri:uri-path url))
-         ;; FIXME: While we ourselves guarantee the correctness of nyxt:// URLs,
-         ;; it would be nice to ensure it processes even the malformed URLs.
-         (params (quri:uri-query-params url))
-         (internal-page-name (uiop:safe-read-from-string (str:upcase symbol)
-                                                         :package (find-package :nyxt))))
-    (if (gethash internal-page-name *nyxt-url-commands*)
-        (values internal-page-name (query-params->arglist params))
-        (error "There's no nyxt:~a internal-page defined" symbol))))
+  ;; this means that http:new would return fine...
+  (let* ((%url (url url))
+         (internal-page-name (uiop:safe-read-from-string (str:upcase (quri:uri-path %url))
+                                                         :package (find-package :nyxt)))
+         (internal-page (gethash internal-page-name *nyxt-url-commands*)))
+    (if internal-page
+        (values internal-page-name
+                internal-page
+                (query-params->arglist (quri:uri-query-params %url)))
+        (error "No internal page corresponds to URL ~a" url))))
 
 (define-internal-scheme "nyxt"
     ;; NOTE: We don't set any security settings (such as :local-p, :secure-p
@@ -434,18 +435,16 @@ guarantee of the same result."
     ;;   HTTP status code 301—works.
     ;; - nyxt:// pages are linkable from outside Nyxt!
     (lambda (url buffer)
-      (with-protect ("Error while processing the \"nyxt:\" URL: ~a" :condition)
-        (let ((url (quri:uri (str:replace-first "://" ":" url))))
-          (log:debug "Internal page ~a requested." url)
-          (multiple-value-bind (internal-page-name args)
-              (parse-nyxt-url url)
-            (when (and internal-page-name)
-              (alex:when-let ((internal-page (gethash internal-page-name *nyxt-url-commands*)))
-                (setf (title buffer) (apply #'dynamic-title internal-page args))
-                ;; FIXME: This allows `find-internal-page-buffer' to find the
-                ;; buffer and `form' to have this buffer as the buffer-var.
-                (setf (url buffer) (quri:uri url))
-                (apply (form internal-page) args))))))))
+      (let ((%url (quri:uri (str:replace-first "://" ":" url))))
+        (with-protect ("Error processing URL ~a: ~a" url :condition)
+          (log:debug "Internal page ~a requested." %url)
+          (multiple-value-bind (internal-page-name internal-page args) (parse-nyxt-url %url)
+            (when internal-page-name
+              (setf (title buffer) (apply #'dynamic-title internal-page args))
+              ;; FIXME: This allows `find-internal-page-buffer' to find the
+              ;; buffer and `form' to have this buffer as the buffer-var.
+              (setf (url buffer) %url)
+              (apply (form internal-page) args)))))))
 
 (define-internal-scheme "nyxt-resource"
     (lambda (url buffer)
