@@ -59,6 +59,8 @@ See also the `web-contexts' slot."))
 (alex:define-constant +default+ "default" :test 'equal)
 
 (defmethod get-context ((browser gtk-browser) name &key ephemeral-p)
+  ;; this call doesn't actually run make-context and thus, schemes aren't
+  ;; updated on new buffer creation.
   (alexandria:ensure-gethash name
                              (if ephemeral-p
                                  (ephemeral-web-contexts browser)
@@ -802,11 +804,99 @@ See `gtk-browser's `modifier-translator' slot."
                                             :status :pressed)))
       (funcall (input-dispatcher window) event sender window))))
 
+;; See commit 9d4b9f6df80f46bf6465dd74d233bb34465db050
 (define-class gtk-scheme ()
-  ()
+  ((context
+    nil
+    :writer nil
+    :reader t
+    :documentation "TODO")
+   (local-p
+    nil
+    :writer nil
+    :reader t
+    :documentation "Local schemes are not accessible to the pages of other schemes.")
+   (no-access-p
+    nil
+    :writer nil
+    :reader t
+    :documentation "No-access schemes cannot access pages with any other scheme.")
+   (secure-p
+    nil
+    :writer nil
+    :reader t
+    :documentation "Secure schemes can access the Web, Web can access them too.
+
+Requires encryption or other means of security.")
+   (cors-enabled-p
+    nil
+    :writer nil
+    :reader t
+    :documentation "Whether other pages can do requests to the resources with this scheme.")
+   (display-isolated-p
+    nil
+    :writer nil
+    :reader t
+    :documentation "Display-isolated schemes cannot be displayed (in iframes, for example) by other schemes.")
+   (empty-document-p
+    nil
+    :writer nil
+    :reader t
+    :documentation "Empty document schemes can be loaded synchronously by websites referring to them."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
   (:documentation "Related to WebKit's custom schemes."))
+
+(defmethod manager ((scheme gtk-scheme))
+  (webkit:webkit-web-context-get-security-manager (context scheme)))
+
+(defmethod (setf local-p) (value (scheme gtk-scheme))
+  (when value
+    (webkit:webkit-security-manager-register-uri-scheme-as-local (manager scheme)
+                                                                 (name scheme)))
+  (setf (slot-value scheme 'local-p) value))
+
+(defmethod (setf no-access-p) (value (scheme gtk-scheme))
+  (when value
+    (webkit:webkit-security-manager-register-uri-scheme-as-no-access (manager scheme)
+                                                                     (name scheme)))
+  (setf (slot-value scheme 'no-access-p) value))
+
+(defmethod (setf secure-p) (value (scheme gtk-scheme))
+  (when value
+    (webkit:webkit-security-manager-register-uri-scheme-as-secure (manager scheme)
+                                                                  (name scheme)))
+  (setf (slot-value scheme 'secure-p) value))
+
+(defmethod (setf cors-enabled-p) (value (scheme gtk-scheme))
+  (when value
+    (webkit:webkit-security-manager-register-uri-scheme-as-cors-enabled (manager scheme)
+                                                                        (name scheme)))
+  (setf (slot-value scheme 'cors-enabled-p) value))
+
+(defmethod (setf display-isolated-p) (value (scheme gtk-scheme))
+  (when value
+    (webkit:webkit-security-manager-register-uri-scheme-as-display-isolated (manager scheme)
+                                                                            (name scheme)))
+  (setf (slot-value scheme 'display-isolated-p) value))
+
+(defmethod (setf empty-document-p) (value (scheme gtk-scheme))
+  (when value
+    (webkit:webkit-security-manager-register-uri-scheme-as-empty-document (manager scheme)
+                                                                          (name scheme)))
+  (setf (slot-value scheme 'empty-document-p) value))
+
+;; (ffi-buffer-evaluate-javascript (current-buffer) (ps:ps (nyxt/ps:lisp-eval (:title "test") (print (+ 2 2)))))
+;; (buffer-load "gemini://rek2.hispagatos.org")
+;; (buffer-load "nyxt:describe-function?fn=%1Bnyxt/mode/hint:hint-mode&function=%1Bnyxt/mode/hint:hint-mode")
+;; bug?
+;; (buffer-load "editor:/home/aadcg/test.txt")
+(defmethod initialize-instance :after ((scheme gtk-scheme) &key)
+  (match (name scheme)
+    ("nyxt-resource" (setf (secure-p scheme) t))
+    ("lisp" (setf (cors-enabled-p scheme) t))
+    ("view-source" (setf (no-access-p scheme) t))
+    (_ t)))
 
 ;; From https://github.com/umpirsky/language-list/tree/master/data directory
 ;; listing $(ls /data) and processed with:
@@ -877,6 +967,23 @@ See `gtk-browser's `modifier-translator' slot."
      pointer)
     (cffi:foreign-free pointer)))
 
+(defmethod ffi-register-custom-scheme-callback ((scheme gtk-scheme))
+  "TODO"
+  ;; When recompiling a define-internal-scheme declaration, the changes should
+  ;; be propagated.
+  (webkit:webkit-web-context-register-uri-scheme-callback
+   (context scheme)
+   (name scheme)
+   (lambda (request)
+   ;; the need to set interactive-p to true shows bad design.
+   ;; see commit 62b7dc93f2fa5b0daf34eb5084f02cbaa15399d2
+   (let ((nyxt::*interactive-p* t))
+     ;; this means that the callback can't be live updated.
+     (funcall* (callback scheme)
+               (webkit:webkit-uri-scheme-request-get-uri request))))
+  (or (error-callback scheme)
+      (lambda (c) (echo-warning "Error while routing ~s resource: ~a" scheme c)))))
+
 (defun make-context (name &key ephemeral-p)
   (let* ((context
            (if ephemeral-p
@@ -925,54 +1032,15 @@ See `gtk-browser's `modifier-translator' slot."
        (declare (ignore context))
        (with-protect ("Error in \"download-started\" signal thread: ~a" :condition)
          (wrap-download download))))
-    (maphash
-     (lambda (scheme scheme-object)
-       (webkit:webkit-web-context-register-uri-scheme-callback
-        context scheme
-        (lambda (request)
-          (let ((nyxt::*interactive-p* t)
-                ;; Look up the scheme-object again so that we can live-update
-                ;; the callback without having to create a new view with a new
-                ;; context.
-                (scheme-object (gethash scheme nyxt::*schemes*)))
-            (funcall* (callback scheme-object)
-                      (webkit:webkit-uri-scheme-request-get-uri request)
-                      (find (webkit:webkit-uri-scheme-request-get-web-view request)
-                            (delete nil
-                                    (append (list (status-buffer (current-window))
-                                                  (message-buffer (current-window)))
-                                            (nyxt::active-prompt-buffers (current-window))
-                                            (nyxt::panel-buffers (current-window))
-                                            (buffer-list)))
-                            :key #'gtk-object))))
-        (or (error-callback scheme-object)
-            (lambda (condition)
-              (echo-warning "Error while routing ~s resource: ~a" scheme condition))))
-       ;; We err on the side of caution, assigning the most restrictive policy
-       ;; out of those provided. Should it be the other way around?
-       (let ((manager (webkit:webkit-web-context-get-security-manager context)))
-         (cond
-           ((local-p scheme-object)
-            (webkit:webkit-security-manager-register-uri-scheme-as-local
-             manager scheme))
-           ((no-access-p scheme-object)
-            (webkit:webkit-security-manager-register-uri-scheme-as-no-access
-             manager scheme))
-           ((display-isolated-p scheme-object)
-            (webkit:webkit-security-manager-register-uri-scheme-as-display-isolated
-             manager scheme))
-           ((secure-p scheme-object)
-            (webkit:webkit-security-manager-register-uri-scheme-as-secure
-             manager scheme))
-           ((cors-enabled-p scheme-object)
-            (webkit:webkit-security-manager-register-uri-scheme-as-cors-enabled
-             manager scheme))
-           ((empty-document-p scheme-object)
-            (webkit:webkit-security-manager-register-uri-scheme-as-empty-document
-             manager scheme)))))
-     nyxt::*schemes*)
-    (unless (or ephemeral-p
-                (internal-context-p name))
+    (maphash (lambda (scheme-name callbacks)
+               (ffi-register-custom-scheme-callback (make-instance
+                                                     'scheme
+                                                     :name scheme-name
+                                                     :context context
+                                                     :callback (first callbacks)
+                                                     :error-callback (second callbacks))))
+             nyxt::*schemes*)
+    (unless (or ephemeral-p (internal-context-p name))
       (let ((cookies-path (files:expand (make-instance 'cookies-file :context-name name))))
         (webkit:webkit-cookie-manager-set-persistent-storage
          cookie-manager
@@ -1121,10 +1189,15 @@ See `finalize-buffer'."
        ((and (quri:uri= url (url request-data))
              (str:starts-with-p "text/gemini" (mime-type request-data)))
         (log:debug "Processing gemtext from ~a." (render-url url))
+        ;; This is handled by auto-rules
         (enable-modes* 'nyxt/mode/small-web:small-web-mode (buffer request-data))
         (webkit:webkit-policy-decision-ignore response-policy-decision)
+        ;; non-portable?
         (ffi-buffer-load-html
-         buffer (nyxt/mode/small-web:gemtext-render (or (ignore-errors (dex:get (quri:render-uri url))) "") buffer)
+         buffer
+         (nyxt/mode/small-web:gemtext-render (or (ignore-errors (dex:get (quri:render-uri url)))
+                                                 "")
+                                             buffer)
          url))
        ((not (known-type-p request-data))
         (log:debug "Initiate download of ~s." (render-url (url request-data)))
@@ -2259,7 +2332,7 @@ See `make-buffer' for a description of the other arguments."
                                (renderer-window gtk-window)
                                (renderer-buffer gtk-buffer)
                                (nyxt/mode/download:renderer-download gtk-download)
-                               (renderer-request-data gtk-request-data )
+                               (renderer-request-data gtk-request-data)
                                (renderer-scheme gtk-scheme)
                                (nyxt/mode/user-script:renderer-user-style gtk-user-style)
                                (nyxt/mode/user-script:renderer-user-script gtk-user-script)))))
@@ -2281,5 +2354,7 @@ See `make-buffer' for a description of the other arguments."
 
 (setf nyxt::*renderer* (make-instance 'gtk-renderer))
 
+;; setting append as keyword doesn't work because the symbol is already part of
+;; the keyword package.
 (defmethod browser-schemes append ((browser gtk-browser))
   '("webkit" "webkit-pdfjs-viewer"))

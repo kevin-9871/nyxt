@@ -381,6 +381,7 @@ Nyxt provides. For example, one can use the "
               (nyxt/mode/bookmark:bookmark-add (url-at-point (current-buffer))))
             "Bookmark Link")))
 
+      ;; needs to be re-written.
       (:nsection :title "Custom URL schemes"
         (:p "If there's a scheme that Nyxt doesn't support, but you want it to, you can
 always define the handler for this scheme so that it's Nyxt-openable.")
@@ -394,8 +395,7 @@ always define the handler for this scheme so that it's Nyxt-openable.")
                  (:h1 "Bleep bloop?")
                  (:p (loop repeat (parse-integer (quri:uri-path (url url)) :junk-allowed t)
                            collect (:li (elt '("bleep" "bloop") (random 2))))))
-               "text/html;charset=utf8"))
-            :local-p t))
+               "text/html;charset=utf8"))))
         (:p "What this piece of code does is")
         (:ul
          (:li "Define a new scheme.")
@@ -410,6 +410,7 @@ opened in.")
          (:li "Return it as a " (:code "text/html") " content."))
         (:p "The next time you run Nyxt and open " (:code "bleep:20")
             ", you'll see a list of twenty bleeps and bloops.")
+        ;; mention that the renderer is responsible for it.
         (:p "Internal schemes can return any type of content (both strings and arrays of
 bytes are recognized), and they are capable of being "
             (:nxref :class-name 'scheme :slot 'cors-enabled-p "CORS-enabled")

@@ -3,7 +3,13 @@
 
 (in-package :nyxt/tests/renderer)
 
+;; this test basically tests whether the GTK renderer is able to do its job wrt
+;; to schemes.
+
+;; this test needs to be re-written otherwise it will fail.
+;; to fix it, initialize-instance :after ((scheme gtk-scheme) &key) needs to be tweaked.
 (nyxt:define-internal-scheme "iframe-embed"
+    ;; doesn't need buffer
     (lambda (url buffer)
       (declare (ignorable url buffer))
       (spinneret:with-html-string
@@ -22,7 +28,8 @@
          (:iframe :src "nyxt:new")
          (:span#text-check ""))))
   ;; Same settings as HTTPS, imitating it.
-  :secure-p t)
+  ;; :secure-p t
+  )
 
 (define-test nyxt-url-not-iframe-embeddable ()
   (let ((ready-channel (nyxt::make-channel 1)))

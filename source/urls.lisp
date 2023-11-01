@@ -92,9 +92,10 @@ The URL is fetched, which explains possible bottlenecks."
 Should be redefined by the renderer."))
 
 (define-class scheme (renderer-scheme)
-  ((name (error "Scheme must have a name/scheme")
-         :documentation "Scheme/name of the internal scheme.
-For instance, \"gopher\", \"irc\".")
+  ((name
+    (error "Please provide a name for the scheme.")
+    :documentation "Custom scheme name to handle.
+HTTPS or FILE are examples of schemes.")
    (callback
     nil
     :type (or null function)
@@ -113,27 +114,7 @@ Returns up to five values:
     :type (or null function)
     :documentation "Callback to use when a condition is signaled.
 
-Accepts only one argument: the signaled condition.")
-   (local-p
-    nil
-    :documentation "Local schemes are not accessible to the pages of other schemes.")
-   (no-access-p
-    nil
-    :documentation "No-access schemes cannot access pages with any other scheme.")
-   (secure-p
-    nil
-    :documentation "Secure schemes can access the Web, Web can access them too.
-
-Requires encryption or other means of security.")
-   (cors-enabled-p
-    nil
-    :documentation "Whether other pages can do requests to the resources with this scheme.")
-   (display-isolated-p
-    nil
-    :documentation "Display-isolated schemes cannot be displayed (in iframes, for example) by other schemes.")
-   (empty-document-p
-    nil
-    :documentation "Empty document schemes can be loaded synchronously by websites referring to them."))
+Accepts only one argument: the signaled condition."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
   (:documentation "Representation of Nyxt-specific internal schemes.
@@ -149,14 +130,10 @@ content. In case something goes wrong, runs `error-callback'.")
   "A table of internal schemes registered in Nyxt.
 Keys are scheme strings, values are `scheme' objects.")
 
+;; see commit 9d4b9f6df80f46bf6465dd74d233bb34465db050
+;; the privileges aren't general enough
 (export-always 'define-internal-scheme)
-(defun define-internal-scheme (scheme-name callback
-                               &rest keys
-                               &key local-p
-                                 no-access-p
-                                 secure-p
-                                 cors-enabled-p
-                               &allow-other-keys)
+(defun define-internal-scheme (scheme-name callback &optional error-callback)
   "Define a handler (running CALLBACK) for SCHEME-NAME `scheme'.
 
 CALLBACK is called with two arguments:
@@ -165,12 +142,10 @@ CALLBACK is called with two arguments:
 
 For keyword arguments' meaning, see the corresponding `scheme' slot
 documentation."
-  (declare (ignorable local-p no-access-p secure-p cors-enabled-p))
+  ;; it makes no sense to initialize scheme objects here, since scheme is a
+  ;; renderer-specfic class.
   (setf (gethash scheme-name *schemes*)
-        (apply #'make-instance 'scheme
-               :name scheme-name
-               :callback callback
-               keys)))
+        (list callback error-callback)))
 
 (defmemo lookup-hostname (name)
   "Resolve hostname NAME and memoize the result."
@@ -326,8 +301,8 @@ Authority is compared case-insensitively (RFC 3986)."
 (-> symbol->param-name (symbol) string)
 (defun symbol->param-name (symbol)
   "Turn the provided SYMBOL into a reasonable query URL parameter name."
-  (let* ((*package* (find-package :nyxt))
-         (*print-case* :downcase))
+  (let ((*package* (find-package :nyxt))
+        (*print-case* :downcase))
     (if (keywordp symbol)
         (format nil "~(~a~)" symbol)
         (format nil "~s" symbol))))
@@ -434,23 +409,21 @@ guarantee of the same result."
     ;; - Redirection—both as window.location.(href|assign|replace) and
     ;;   HTTP status code 301—works.
     ;; - nyxt:// pages are linkable from outside Nyxt!
-    (lambda (url buffer)
+    (lambda (url)
       (let ((%url (quri:uri (str:replace-first "://" ":" url))))
         (with-protect ("Error processing URL ~a: ~a" url :condition)
           (log:debug "Internal page ~a requested." %url)
           (multiple-value-bind (internal-page-name internal-page args) (parse-nyxt-url %url)
             (when internal-page-name
-              (setf (title buffer) (apply #'dynamic-title internal-page args))
+              ;; (setf (title buffer) (apply #'dynamic-title internal-page args))
               ;; FIXME: This allows `find-internal-page-buffer' to find the
               ;; buffer and `form' to have this buffer as the buffer-var.
-              (setf (url buffer) %url)
+              ;; (setf (url buffer) %url)
               (apply (form internal-page) args)))))))
 
 (define-internal-scheme "nyxt-resource"
-    (lambda (url buffer)
-      (declare (ignore buffer))
-      (nth-value 0 (gethash (quri:uri-path (url url)) *static-data*)))
-  :secure-p t)
+    (lambda (url)
+      (nth-value 0 (gethash (quri:uri-path (url url)) *static-data*))))
 
 (-> lisp-url (&rest t &key
                     (:id string)
@@ -561,41 +534,48 @@ The ARGS are used as a keyword arglist for the CALLBACK."
                      (then ,callback))))))
 (export-always 'nyxt/ps::lisp-eval :nyxt/ps)
 
+;; does it fail in the gtk port?
 (define-internal-scheme "lisp"
-    (lambda (url buffer)
+    (lambda (url)
       (let ((url (quri:uri url)))
         ;; TODO: Replace this condition with `(not (network-buffer-p buffer))`?
-        (if (or (status-buffer-p buffer)
-                (panel-buffer-p buffer)
-                (prompt-buffer-p buffer)
-                (internal-url-p (url buffer)))
+        (if (or (status-buffer-p (current-buffer))
+                (panel-buffer-p (current-buffer))
+                (prompt-buffer-p (current-buffer))
+                (internal-url-p (url (current-buffer))))
             (let* ((request-id (quri:uri-host url))
                    (params (and url (quri:uri-query-params url)))
                    (title (when params
                             (alex:assoc-value params "title")))
                    (args (alexandria:remove-from-plist (query-params->arglist params) :title)))
-              (log:debug "Evaluate Lisp callback ~a from internal page ~a: ~a" request-id buffer (or title "UNTITLED"))
-              (values (let ((result (with-current-buffer buffer
-                                      (let ((callback (sera:synchronized ((lisp-url-callbacks buffer))
-                                                        (gethash request-id (lisp-url-callbacks buffer)))))
-                                        (if callback
-                                            (run callback args)
-                                            (log:warn "Request ~a is bound to no callback for buffer ~a"
-                                                      url buffer))))))
-                        ;; Objects and other complex structures make cl-json choke.
-                        ;; TODO: Maybe encode it to the format that `cl-json'
-                        ;; supports, then we can override the encoding and
-                        ;; decoding methods and allow arbitrary objects (like
-                        ;; buffers) in the nyxt:// URL arguments..
-                        (j:encode
-                         (when (or (scalar-p result)
-                                   (and (sequence-p result)
-                                        (every #'scalar-p result)))
-                           result)))
-                      "application/json"))
+              (log:debug "Evaluate Lisp callback ~a from internal page ~a: ~a"
+                         request-id (current-buffer) (or title "UNTITLED"))
+              (values
+               (let ((result
+                       (with-current-buffer (current-buffer)
+                         (break)
+                         (let ((callback (sera:synchronized ((lisp-url-callbacks (current-buffer)))
+                                           (gethash request-id (lisp-url-callbacks (current-buffer))))))
+                           (if callback
+                               (run callback args)
+                               (log:warn "Request ~a is bound to no callback for buffer ~a"
+                                         url (current-buffer)))))))
+                 ;; Objects and other complex structures make cl-json choke.
+                 ;; TODO: Maybe encode it to the format that `cl-json'
+                 ;; supports, then we can override the encoding and
+                 ;; decoding methods and allow arbitrary objects (like
+                 ;; buffers) in the nyxt:// URL arguments..
+                 (j:encode
+                  (when (or (scalar-p result)
+                            (and (sequence-p result)
+                                 (every #'scalar-p result)))
+                    result)))
+               "application/json;charset=utf8"))
+
+
             (values "undefined" "application/json;charset=utf8"))))
-  :cors-enabled-p t
-  :error-callback (lambda (c) (log:debug "Error when evaluating lisp URL: ~a" c)))
+  ;; is this error callback needed? It seems properly handled by gtk.
+  (lambda (c) (log:debug "Error when evaluating lisp URL: ~a" c)))
 
 (-> path= (quri:uri quri:uri) boolean)
 (defun path= (url1 url2)

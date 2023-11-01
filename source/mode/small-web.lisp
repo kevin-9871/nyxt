@@ -190,18 +190,18 @@ Implies that `small-web-mode' is enabled."))
 ;; TODO: :display-isolated-p? Gopher's behavior implies inability to embed it
 ;; into pages of the bigger Web, which is exactly what display-isolated means.
 (define-internal-scheme "gopher"
-    (lambda (url buffer)
+    (lambda (url)
       (handler-case
-          (let* ((line (if (uiop:emptyp (quri:uri-path (quri:uri url)))
-                           (buffer-load (str:concat url "/") :buffer buffer)
-                           (cl-gopher:parse-gopher-uri url))))
+          (let ((line (if (uiop:emptyp (quri:uri-path (quri:uri url)))
+                          (buffer-load (str:concat url "/"))
+                          (cl-gopher:parse-gopher-uri url))))
             (if (and (typep line 'cl-gopher:search-line)
                      (uiop:emptyp (cl-gopher:terms line)))
                 (progn (setf (cl-gopher:terms line)
                              (prompt1 :prompt (format nil "Search query for ~a" url)
                                       :sources 'prompter:raw-source))
-                       (buffer-load (cl-gopher:uri-for-gopher-line line) :buffer buffer))
-                (with-current-buffer buffer
+                       (buffer-load (cl-gopher:uri-for-gopher-line line)))
+                (with-current-buffer (current-buffer)
                   (gopher-render line))))
         (cl-gopher:bad-submenu-error ()
           (error-help (format nil "Malformed line at ~s" url)
@@ -266,7 +266,7 @@ Please, check URL correctness and try again.")))
     (:br)))
 
 (export-always 'gemtext-render)
-(defun gemtext-render (gemtext buffer)
+(defun gemtext-render (gemtext &optional (buffer (current-buffer)))
   "Renders the Gemtext (Gemini markup format) to HTML.
 
 Implies that `small-web-mode' is enabled."
@@ -283,8 +283,10 @@ Implies that `small-web-mode' is enabled."
             "text/html;charset=utf8")))
 
 ;; TODO: :secure-p t? Gemini is encrypted, so it can be considered secure.
+;; See cfea4e9b0eb7d4060364ec4fe8b3ce60b8b6c9b4
+;; these schemes shouldn't need to know about the buffer...
 (define-internal-scheme "gemini"
-    (lambda (url buffer)
+    (lambda (url)
       (handler-case
           (sera:mvlet* ((status meta body (gemini:request url)))
             (unless (member status '(:redirect :permanent-redirect))
@@ -297,16 +299,16 @@ Implies that `small-web-mode' is enabled."
                                          :sources 'prompter:raw-source
                                          :invisible-input-p (eq status :sensitive-input))
                               (nyxt::prompt-buffer-canceled () "")))))
-                 (buffer-load (str:concat url "?" text) :buffer buffer)))
+                 (buffer-load (str:concat url "?" text))))
               (:success
                (if (str:starts-with-p "text/gemini" meta)
-                   (gemtext-render body buffer)
+                   (gemtext-render body)
                    (values body meta)))
               ((:redirect :permanent-redirect)
                (push url (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)))
                (if (< (length (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)))
                       (nyxt/mode/small-web:allowed-redirections-count (find-submode 'small-web-mode)))
-                   (buffer-load (quri:merge-uris (quri:uri meta) (quri:uri url)) :buffer buffer)
+                   (buffer-load (quri:merge-uris (quri:uri meta) (quri:uri url)))
                    (error-help
                     "Error"
                     (format nil "The server has caused too many (~a+) redirections.~& ~a~{ -> ~a~}"
