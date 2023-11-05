@@ -93,7 +93,7 @@ Should be redefined by the renderer."))
 
 (define-class scheme (renderer-scheme)
   ((name
-    (error "Please provide a name for the scheme.")
+    (error "Please provide a name for the scheme.") ;needed to error?
     :documentation "Custom scheme name to handle.
 HTTPS or FILE are examples of schemes.")
    (callback
