@@ -928,7 +928,11 @@ invoked via " (:code "flatpak-spawn --host <command> <command-args>") "."))))
   (:nsection :title "UI/UX"
     (:ul
      (:li "Improve source heading buttons, layout and interactions in the "
-          (:nxref :class-name 'prompt-buffer) "."))))
+          (:nxref :class-name 'prompt-buffer) ".")))
+  (:nsection :title "Bug fixes"
+    (:ul
+     (:li "Warn when the " (:nxref :mode 'nyxt/mode/password:password-mode)
+          " cannot find password manager executable."))))
 
 (define-version "4-pre-release-1"
   (:li "When on pre-release, push " (:code "X-pre-release")
