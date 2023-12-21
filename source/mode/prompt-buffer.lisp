@@ -50,6 +50,8 @@ listed and chosen from with the command `set-action-on-return' (bound to
        "M-h" 'history
        "f1 b" 'run-prompt-buffer-command
        "f1 m" 'describe-prompt-buffer
+       ;; what's the difference between return, enter and keypadenter?
+       ;; 2ce72aa4f4d71d9278d43b5fefdc57edd3591979
        "return" 'run-action-on-return
        "keypadenter" 'run-action-on-return
        "M-return" 'set-action-on-return
