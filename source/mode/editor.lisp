@@ -72,6 +72,7 @@ See `describe-class editor-mode' for details."))
            " to see the list of functions to implement."))))
   (:documentation "Return an HTML string representation of the file to be edited."))
 
+;; this is basically a web buffer...
 (define-class editor-buffer (network-buffer ; Questionable, but needed for `buffer-load'.
                              context-buffer modable-buffer document-buffer input-buffer)
   ((nyxt:title "*Editor*"))
@@ -157,3 +158,9 @@ BUFFER is of type `editor-buffer'."
                             (prompt1 :prompt "Edit user file"
                                      :sources 'nyxt::user-file-source)))))
   (edit-file file-path))
+
+;; Why does the editor scheme require a custom buffer?  Over-engineering.
+
+;; As to ensure that (buffer-load "editor:/home/aadcg/test.html") works.
+(define-auto-rule '(match-scheme "editor")
+  :included '(nyxt/mode/editor:editor-mode))
