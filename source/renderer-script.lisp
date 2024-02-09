@@ -278,6 +278,8 @@ See `find-internal-page-buffer'."))
                               (< (length (clss:select "head, body" (plump:parse contents))) 2))
                       (setf contents
                             (spinneret:with-html-string
+                              ;; quirks mode
+                              ;; missing (:doctype) (:html (:head) (:body))...
                               (:head
                                (:title (apply #'dynamic-title
                                               (gethash (name page) *nyxt-url-commands*)
